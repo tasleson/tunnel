@@ -1,0 +1,1337 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Neon Tunnel Rimfire</title>
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      overflow: hidden;
+      background: #000;
+      color: #f7fbff;
+      font-family: "Courier New", Courier, monospace;
+    }
+
+    canvas {
+      display: block;
+      width: 100%;
+      height: 100%;
+    }
+
+    .hud {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      z-index: 4;
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+      padding: 14px clamp(14px, 3vw, 28px);
+      color: #86f7ff;
+      text-shadow: 0 0 8px rgba(30, 230, 255, 0.95);
+      pointer-events: none;
+      user-select: none;
+      letter-spacing: 0;
+      font-weight: 700;
+      font-size: clamp(12px, 2.2vw, 18px);
+    }
+
+    .hud span {
+      min-width: 0;
+      white-space: nowrap;
+    }
+
+    .hud span:nth-child(2),
+    .hud span:nth-child(3) {
+      text-align: center;
+    }
+
+    .hud span:last-child {
+      text-align: right;
+    }
+
+    .overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 5;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+      background: radial-gradient(circle at center, rgba(6, 28, 42, 0.42), rgba(0, 0, 0, 0.92) 64%);
+      color: #fff;
+      text-align: center;
+      pointer-events: none;
+      user-select: none;
+      opacity: 1;
+      transition: opacity 180ms ease;
+    }
+
+    .overlay.hidden {
+      opacity: 0;
+      visibility: hidden;
+    }
+
+    .overlay-panel {
+      max-width: 720px;
+      width: min(92vw, 720px);
+      border: 1px solid rgba(134, 247, 255, 0.72);
+      border-radius: 8px;
+      padding: clamp(22px, 4vw, 42px);
+      background: rgba(0, 6, 12, 0.72);
+      box-shadow:
+        0 0 18px rgba(20, 225, 255, 0.45),
+        inset 0 0 24px rgba(20, 225, 255, 0.12);
+    }
+
+    h1 {
+      margin: 0 0 16px;
+      color: #ff3df2;
+      text-shadow:
+        0 0 10px rgba(255, 61, 242, 0.98),
+        0 0 22px rgba(255, 61, 242, 0.6);
+      font-size: clamp(34px, 7.2vw, 82px);
+      line-height: 0.94;
+      letter-spacing: 0;
+    }
+
+    .status {
+      min-height: 1.3em;
+      margin: 0 0 18px;
+      color: #fff86a;
+      text-shadow: 0 0 12px rgba(255, 248, 106, 0.85);
+      font-size: clamp(16px, 3vw, 25px);
+      font-weight: 700;
+    }
+
+    .controls {
+      display: grid;
+      gap: 8px;
+      margin: 22px auto 0;
+      color: #a8ffb5;
+      text-shadow: 0 0 8px rgba(80, 255, 130, 0.78);
+      font-size: clamp(13px, 2vw, 17px);
+      line-height: 1.35;
+    }
+
+    .prompt {
+      margin: 24px 0 0;
+      color: #86f7ff;
+      text-shadow: 0 0 12px rgba(30, 230, 255, 0.95);
+      font-size: clamp(15px, 2.8vw, 22px);
+      animation: blink 1s steps(2, start) infinite;
+    }
+
+    @keyframes blink {
+      50% { opacity: 0.25; }
+    }
+
+    @media (max-width: 520px) {
+      .hud {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 5px 12px;
+        padding: 12px 14px;
+        font-size: 11px;
+      }
+
+      .hud span:nth-child(odd) {
+        text-align: left;
+      }
+
+      .hud span:nth-child(even) {
+        text-align: right;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="hud" aria-hidden="true">
+    <span id="score">SCORE 000000</span>
+    <span id="level">LEVEL 01</span>
+    <span id="lives">LIVES 3</span>
+    <span id="wave">RIM 01</span>
+  </div>
+
+  <div id="overlay" class="overlay">
+    <div class="overlay-panel">
+      <h1>RIMFIRE</h1>
+      <p id="status" class="status">NEON VECTOR TUNNEL</p>
+      <div class="controls">
+        <span>LEFT / RIGHT, A / D, or mouse wheel: move around the rim</span>
+        <span>SPACE: fire down the tunnel</span>
+        <span>ENTER: start or restart</span>
+      </div>
+      <p class="prompt">PRESS ENTER</p>
+    </div>
+  </div>
+
+  <script type="module">
+    import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js";
+
+    const TAU = Math.PI * 2;
+    const GAME_STATES = {
+      READY: "ready",
+      PLAYING: "playing",
+      LEVEL_CLEAR: "levelClear",
+      GAME_OVER: "gameOver"
+    };
+
+    // Tracks held keys and one-frame presses so controls stay responsive at any frame rate.
+    class InputManager {
+      constructor() {
+        this.keys = new Set();
+        this.pressed = new Set();
+        this.wheelAccumulator = 0;
+        this.wheelSteps = 0;
+
+        window.addEventListener("keydown", (event) => {
+          const code = event.code;
+          if (["ArrowLeft", "ArrowRight", "KeyA", "KeyD", "Space", "Enter"].includes(code)) {
+            event.preventDefault();
+          }
+
+          if (!this.keys.has(code)) {
+            this.pressed.add(code);
+          }
+          this.keys.add(code);
+        });
+
+        window.addEventListener("keyup", (event) => {
+          this.keys.delete(event.code);
+        });
+
+        window.addEventListener("wheel", (event) => {
+          event.preventDefault();
+          const dominantDelta = Math.abs(event.deltaY) >= Math.abs(event.deltaX)
+            ? event.deltaY
+            : event.deltaX;
+          if (dominantDelta === 0) return;
+
+          if (event.deltaMode === WheelEvent.DOM_DELTA_LINE) {
+            this.wheelSteps += Math.sign(dominantDelta);
+            return;
+          }
+
+          if (event.deltaMode === WheelEvent.DOM_DELTA_PAGE) {
+            this.wheelSteps += Math.sign(dominantDelta);
+            return;
+          }
+
+          if (Math.abs(dominantDelta) >= 35) {
+            this.wheelSteps += Math.sign(dominantDelta);
+            this.wheelAccumulator = 0;
+            return;
+          }
+
+          this.wheelAccumulator += dominantDelta;
+
+          while (Math.abs(this.wheelAccumulator) >= 45) {
+            this.wheelSteps += Math.sign(this.wheelAccumulator);
+            this.wheelAccumulator -= Math.sign(this.wheelAccumulator) * 45;
+          }
+        }, { passive: false });
+      }
+
+      isDown(...codes) {
+        return codes.some((code) => this.keys.has(code));
+      }
+
+      wasPressed(...codes) {
+        return codes.some((code) => this.pressed.has(code));
+      }
+
+      consumeWheelStep() {
+        if (this.wheelSteps === 0) return 0;
+        const direction = Math.sign(this.wheelSteps);
+        this.wheelSteps -= direction;
+        return direction;
+      }
+
+      endFrame() {
+        this.pressed.clear();
+      }
+    }
+
+    // Small procedural synth for arcade-style shots, impacts, and level-clear stings.
+    class SoundFX {
+      constructor() {
+        this.context = null;
+        this.enabled = true;
+      }
+
+      ensureContext() {
+        if (!this.context) {
+          const AudioContext = window.AudioContext || window.webkitAudioContext;
+          this.context = new AudioContext();
+        }
+        if (this.context.state === "suspended") {
+          this.context.resume();
+        }
+      }
+
+      tone({ frequency = 440, duration = 0.12, type = "square", gain = 0.04, slide = 1 }) {
+        if (!this.enabled) return;
+        this.ensureContext();
+
+        const now = this.context.currentTime;
+        const oscillator = this.context.createOscillator();
+        const volume = this.context.createGain();
+
+        oscillator.type = type;
+        oscillator.frequency.setValueAtTime(frequency, now);
+        oscillator.frequency.exponentialRampToValueAtTime(Math.max(20, frequency * slide), now + duration);
+        volume.gain.setValueAtTime(gain, now);
+        volume.gain.exponentialRampToValueAtTime(0.0001, now + duration);
+
+        oscillator.connect(volume);
+        volume.connect(this.context.destination);
+        oscillator.start(now);
+        oscillator.stop(now + duration);
+      }
+
+      noise(duration = 0.18, gain = 0.08) {
+        if (!this.enabled) return;
+        this.ensureContext();
+
+        const bufferSize = Math.max(1, Math.floor(this.context.sampleRate * duration));
+        const buffer = this.context.createBuffer(1, bufferSize, this.context.sampleRate);
+        const data = buffer.getChannelData(0);
+        for (let i = 0; i < bufferSize; i += 1) {
+          data[i] = (Math.random() * 2 - 1) * (1 - i / bufferSize);
+        }
+
+        const source = this.context.createBufferSource();
+        const volume = this.context.createGain();
+        volume.gain.setValueAtTime(gain, this.context.currentTime);
+        volume.gain.exponentialRampToValueAtTime(0.0001, this.context.currentTime + duration);
+
+        source.buffer = buffer;
+        source.connect(volume);
+        volume.connect(this.context.destination);
+        source.start();
+      }
+
+      shoot() {
+        this.tone({ frequency: 820, duration: 0.08, type: "square", gain: 0.035, slide: 1.7 });
+      }
+
+      enemyHit() {
+        this.tone({ frequency: 180, duration: 0.16, type: "sawtooth", gain: 0.055, slide: 0.35 });
+      }
+
+      playerHit() {
+        this.noise(0.28, 0.13);
+        this.tone({ frequency: 95, duration: 0.28, type: "sawtooth", gain: 0.08, slide: 0.42 });
+      }
+
+      levelClear() {
+        this.tone({ frequency: 330, duration: 0.11, type: "triangle", gain: 0.05, slide: 1.25 });
+        window.setTimeout(() => this.tone({ frequency: 495, duration: 0.13, type: "triangle", gain: 0.05, slide: 1.25 }), 80);
+        window.setTimeout(() => this.tone({ frequency: 742, duration: 0.16, type: "triangle", gain: 0.05, slide: 1.18 }), 170);
+      }
+    }
+
+    // Wireframe tube built from lane lines plus depth rings using BufferGeometry.
+    class Tunnel {
+      constructor(scene, laneCount = 16) {
+        this.scene = scene;
+        this.laneCount = laneCount;
+        this.depthSegments = 22;
+        this.nearZ = 0;
+        this.farZ = -58;
+        this.nearRadius = 6.6;
+        this.farRadius = 1.05;
+        this.flashTimer = 0;
+        this.twist = 0;
+        this.wobbleAmplitude = 0;
+        this.wobbleFrequency = 1;
+        this.wobblePhase = 0;
+        this.laneOffsets = [];
+        this.laneRadiusFactors = [];
+        this.ringRadiusFactors = [];
+        this.safeLaneOffset = 0;
+
+        this.group = new THREE.Group();
+        this.scene.add(this.group);
+
+        this.material = new THREE.LineBasicMaterial({
+          color: 0x1ee6ff,
+          transparent: true,
+          opacity: 0.78,
+          blending: THREE.AdditiveBlending
+        });
+
+        this.accentMaterial = new THREE.LineBasicMaterial({
+          color: 0xff3df2,
+          transparent: true,
+          opacity: 0.52,
+          blending: THREE.AdditiveBlending
+        });
+
+        this.safeRimMaterial = new THREE.LineBasicMaterial({
+          color: 0xa8ff3f,
+          transparent: true,
+          opacity: 0.9,
+          blending: THREE.AdditiveBlending
+        });
+
+        this.dangerRimMaterial = new THREE.LineBasicMaterial({
+          color: 0xff4a2d,
+          transparent: true,
+          opacity: 0.74,
+          blending: THREE.AdditiveBlending
+        });
+
+        this.randomize(1);
+      }
+
+      randomize(level = 1) {
+        const laneOptions = [12, 14, 16, 18, 20];
+        this.laneCount = laneOptions[Math.floor(Math.random() * laneOptions.length)];
+        this.depthSegments = 20 + Math.floor(Math.random() * 8);
+        this.nearRadius = THREE.MathUtils.randFloat(5.6, 6.35);
+        this.farRadius = THREE.MathUtils.randFloat(0.65, 1.35);
+        this.farZ = THREE.MathUtils.randFloat(-52, -66);
+        this.twist = THREE.MathUtils.randFloatSpread(0.75 + Math.min(level, 8) * 0.035);
+        this.wobbleAmplitude = THREE.MathUtils.randFloat(0.04, 0.13);
+        this.wobbleFrequency = THREE.MathUtils.randFloat(1.2, 3.4);
+        this.wobblePhase = Math.random() * TAU;
+        this.safeLaneOffset = Math.random() < 0.5 ? 0 : 1;
+        this.laneOffsets = [];
+        this.laneRadiusFactors = [];
+        this.ringRadiusFactors = [];
+
+        for (let lane = 0; lane < this.laneCount; lane += 1) {
+          this.laneOffsets.push(THREE.MathUtils.randFloatSpread(0.055));
+          this.laneRadiusFactors.push(THREE.MathUtils.randFloat(0.92, 1.07));
+        }
+
+        for (let segment = 0; segment <= this.depthSegments; segment += 1) {
+          const t = segment / this.depthSegments;
+          const taperNoise = Math.sin(t * TAU * this.wobbleFrequency + this.wobblePhase);
+          this.ringRadiusFactors.push(1 + taperNoise * this.wobbleAmplitude);
+        }
+
+        this.build();
+      }
+
+      build() {
+        this.group.children.forEach((child) => {
+          child.geometry.dispose();
+        });
+        this.group.clear();
+
+        const lanePoints = [];
+        const ringPoints = [];
+        const accentPoints = [];
+        const safeRimPoints = [];
+        const dangerRimPoints = [];
+
+        for (let lane = 0; lane < this.laneCount; lane += 1) {
+          for (let segment = 0; segment < this.depthSegments; segment += 1) {
+            lanePoints.push(...this.pointAt(lane, segment));
+            lanePoints.push(...this.pointAt(lane, segment + 1));
+          }
+
+          if (lane % 4 === 0) {
+            accentPoints.push(...this.pointAt(lane, 0));
+            accentPoints.push(...this.pointAt(lane, this.depthSegments));
+          }
+
+          const markerPoints = this.isSafeRimLane(lane) ? safeRimPoints : dangerRimPoints;
+          markerPoints.push(...this.rimMarkerAt(lane));
+        }
+
+        for (let segment = 0; segment <= this.depthSegments; segment += 1) {
+          for (let lane = 0; lane < this.laneCount; lane += 1) {
+            ringPoints.push(...this.pointAt(lane, segment));
+            ringPoints.push(...this.pointAt((lane + 1) % this.laneCount, segment));
+          }
+        }
+
+        const laneGeometry = new THREE.BufferGeometry();
+        laneGeometry.setAttribute("position", new THREE.Float32BufferAttribute(lanePoints, 3));
+        const ringGeometry = new THREE.BufferGeometry();
+        ringGeometry.setAttribute("position", new THREE.Float32BufferAttribute(ringPoints, 3));
+        const accentGeometry = new THREE.BufferGeometry();
+        accentGeometry.setAttribute("position", new THREE.Float32BufferAttribute(accentPoints, 3));
+        const safeRimGeometry = new THREE.BufferGeometry();
+        safeRimGeometry.setAttribute("position", new THREE.Float32BufferAttribute(safeRimPoints, 3));
+        const dangerRimGeometry = new THREE.BufferGeometry();
+        dangerRimGeometry.setAttribute("position", new THREE.Float32BufferAttribute(dangerRimPoints, 3));
+
+        this.group.add(new THREE.LineSegments(laneGeometry, this.material));
+        this.group.add(new THREE.LineSegments(ringGeometry, this.material));
+        this.group.add(new THREE.LineSegments(accentGeometry, this.accentMaterial));
+        this.group.add(new THREE.LineSegments(safeRimGeometry, this.safeRimMaterial));
+        this.group.add(new THREE.LineSegments(dangerRimGeometry, this.dangerRimMaterial));
+      }
+
+      angleForLane(lane, depth = 0) {
+        const wrappedLane = THREE.MathUtils.euclideanModulo(lane, this.laneCount);
+        const baseAngle = -Math.PI / 2 + (wrappedLane / this.laneCount) * TAU;
+        const laneOffset = this.laneOffsets[wrappedLane] || 0;
+        const ripple = Math.sin(depth * TAU * 1.4 + wrappedLane * 0.73 + this.wobblePhase) * 0.018;
+        return baseAngle + laneOffset + this.twist * depth + ripple;
+      }
+
+      radiusAt(t) {
+        const segment = Math.round(t * this.depthSegments);
+        const ringFactor = this.ringRadiusFactors[segment] || 1;
+        return THREE.MathUtils.lerp(this.nearRadius, this.farRadius, t) * ringFactor;
+      }
+
+      zAt(t) {
+        return THREE.MathUtils.lerp(this.nearZ, this.farZ, t);
+      }
+
+      pointAt(lane, segment) {
+        return this.positionFor(lane, segment / this.depthSegments).toArray();
+      }
+
+      rimMarkerAt(lane) {
+        const angle = this.angleForLane(lane, 0);
+        const outward = new THREE.Vector3(Math.cos(angle), Math.sin(angle), 0);
+        const tangent = new THREE.Vector3(-Math.sin(angle), Math.cos(angle), 0);
+        const base = this.positionFor(lane, 0);
+        const inner = base.clone().add(outward.clone().multiplyScalar(0.08));
+        const outer = base.clone().add(outward.clone().multiplyScalar(0.58));
+        const center = base.clone().add(outward.clone().multiplyScalar(0.38));
+        const crossA = center.clone().add(tangent.clone().multiplyScalar(0.16));
+        const crossB = center.clone().add(tangent.clone().multiplyScalar(-0.16));
+
+        return [
+          ...inner.toArray(), ...outer.toArray(),
+          ...crossA.toArray(), ...crossB.toArray()
+        ];
+      }
+
+      positionFor(lane, depth) {
+        const wrappedLane = THREE.MathUtils.euclideanModulo(lane, this.laneCount);
+        const angle = this.angleForLane(wrappedLane, depth);
+        const laneFactor = THREE.MathUtils.lerp(this.laneRadiusFactors[wrappedLane] || 1, 1, depth * 0.55);
+        const radius = this.radiusAt(depth) * laneFactor;
+        return new THREE.Vector3(
+          Math.cos(angle) * radius,
+          Math.sin(angle) * radius,
+          this.zAt(depth)
+        );
+      }
+
+      getFitRadius() {
+        let maxRadius = 0;
+        for (let lane = 0; lane < this.laneCount; lane += 1) {
+          for (let segment = 0; segment <= this.depthSegments; segment += 1) {
+            const position = this.positionFor(lane, segment / this.depthSegments);
+            maxRadius = Math.max(maxRadius, Math.hypot(position.x, position.y));
+          }
+        }
+        return maxRadius;
+      }
+
+      isSafeRimLane(lane) {
+        return THREE.MathUtils.euclideanModulo(lane + this.safeLaneOffset, this.laneCount) % 2 === 0;
+      }
+
+      rotateRimSafety(direction = 1) {
+        this.safeLaneOffset = THREE.MathUtils.euclideanModulo(this.safeLaneOffset + direction, this.laneCount);
+        this.build();
+        this.flashTimer = Math.max(this.flashTimer, 0.28);
+      }
+
+      triggerFlash() {
+        this.flashTimer = 1.1;
+      }
+
+      update(delta, elapsed) {
+        const pulse = 0.72 + Math.sin(elapsed * 5.8) * 0.12;
+        this.material.opacity = pulse;
+        this.accentMaterial.opacity = 0.46 + Math.sin(elapsed * 4.7 + 1.4) * 0.12;
+        this.safeRimMaterial.opacity = 0.82 + Math.abs(Math.sin(elapsed * 8.5)) * 0.18;
+        this.dangerRimMaterial.opacity = 0.48 + Math.abs(Math.sin(elapsed * 6.5 + 1.2)) * 0.18;
+
+        if (this.flashTimer > 0) {
+          this.flashTimer = Math.max(0, this.flashTimer - delta);
+          const flash = Math.sin(this.flashTimer * 36) > 0 ? 1 : 0;
+          this.material.color.setHex(flash ? 0xfff86a : 0x1ee6ff);
+          this.accentMaterial.color.setHex(flash ? 0xffffff : 0xff3df2);
+          this.group.scale.setScalar(1 + this.flashTimer * 0.025);
+        } else {
+          this.material.color.setHex(0x1ee6ff);
+          this.accentMaterial.color.setHex(0xff3df2);
+          this.group.scale.setScalar(1);
+        }
+      }
+    }
+
+    // The player is locked to one tunnel lane at the near rim.
+    class Player {
+      constructor(scene, tunnel) {
+        this.scene = scene;
+        this.tunnel = tunnel;
+        this.lane = 0;
+        this.targetLane = 0;
+        this.cooldown = 0;
+        this.moveRepeat = 0;
+        this.invulnerable = 0;
+        this.deadTimer = 0;
+
+        this.group = new THREE.Group();
+        this.material = new THREE.LineBasicMaterial({
+          color: 0xfff86a,
+          transparent: true,
+          opacity: 1,
+          blending: THREE.AdditiveBlending
+        });
+
+        const points = [
+          -0.42, -0.14, 0, 0.5, 0, 0,
+          0.5, 0, 0, -0.42, 0.14, 0,
+          -0.42, 0.14, 0, -0.22, 0, 0,
+          -0.22, 0, 0, -0.42, -0.14, 0,
+          -0.2, -0.28, 0, -0.06, -0.1, 0,
+          -0.2, 0.28, 0, -0.06, 0.1, 0
+        ];
+        const geometry = new THREE.BufferGeometry();
+        geometry.setAttribute("position", new THREE.Float32BufferAttribute(points, 3));
+        this.mesh = new THREE.LineSegments(geometry, this.material);
+        this.group.add(this.mesh);
+        this.scene.add(this.group);
+
+        this.updateTransform();
+      }
+
+      reset() {
+        this.lane = 0;
+        this.targetLane = 0;
+        this.cooldown = 0;
+        this.moveRepeat = 0;
+        this.invulnerable = 1.8;
+        this.deadTimer = 0;
+        this.group.visible = true;
+        this.updateTransform();
+      }
+
+      update(delta, input, elapsed) {
+        if (this.deadTimer > 0) {
+          this.deadTimer = Math.max(0, this.deadTimer - delta);
+          this.group.visible = false;
+          return;
+        }
+
+        this.moveRepeat = Math.max(0, this.moveRepeat - delta);
+        const leftPressed = input.wasPressed("ArrowLeft", "KeyA");
+        const rightPressed = input.wasPressed("ArrowRight", "KeyD");
+        const leftHeld = input.isDown("ArrowLeft", "KeyA");
+        const rightHeld = input.isDown("ArrowRight", "KeyD");
+        const wheelStep = input.consumeWheelStep();
+
+        if (wheelStep !== 0) {
+          this.moveLane(wheelStep);
+        } else if (leftPressed || (!rightHeld && leftHeld && this.moveRepeat <= 0)) {
+          this.moveLane(-1);
+        } else if (rightPressed || (!leftHeld && rightHeld && this.moveRepeat <= 0)) {
+          this.moveLane(1);
+        }
+
+        this.lane = this.targetLane;
+        this.cooldown = Math.max(0, this.cooldown - delta);
+        this.invulnerable = Math.max(0, this.invulnerable - delta);
+        this.material.opacity = this.invulnerable > 0 ? 0.35 + Math.abs(Math.sin(elapsed * 18)) * 0.65 : 1;
+        this.group.visible = true;
+        this.updateTransform();
+      }
+
+      updateTransform() {
+        const position = this.tunnel.positionFor(this.lane, 0);
+        const angle = this.tunnel.angleForLane(this.lane);
+        const outward = new THREE.Vector3(Math.cos(angle), Math.sin(angle), 0);
+
+        this.group.position.copy(position).add(outward.multiplyScalar(0.25));
+        this.group.rotation.set(0, 0, angle);
+        this.group.scale.setScalar(1.25);
+      }
+
+      moveLane(direction) {
+        this.targetLane = THREE.MathUtils.euclideanModulo(this.targetLane + direction, this.tunnel.laneCount);
+        this.moveRepeat = 0.075;
+      }
+
+      canShoot() {
+        return this.cooldown <= 0 && this.deadTimer <= 0;
+      }
+
+      shoot() {
+        this.cooldown = 0.16;
+      }
+
+      hit() {
+        if (this.invulnerable > 0 || this.deadTimer > 0) return false;
+        this.invulnerable = 2;
+        this.deadTimer = 0.62;
+        return true;
+      }
+    }
+
+    // Shots travel from the player rim toward the far end of the tunnel.
+    class Bullet {
+      constructor(scene, tunnel, lane) {
+        this.scene = scene;
+        this.tunnel = tunnel;
+        this.lane = lane;
+        this.depth = 0.035;
+        this.speed = 1.65;
+        this.alive = true;
+
+        const geometry = new THREE.BufferGeometry();
+        geometry.setAttribute("position", new THREE.Float32BufferAttribute([
+          0, 0, 0.58,
+          0, 0, -0.58,
+          -0.08, 0, 0.32,
+          0.08, 0, -0.32,
+          0.08, 0, 0.32,
+          -0.08, 0, -0.32,
+          0, -0.08, 0.24,
+          0, 0.08, -0.24,
+          0, 0.08, 0.24,
+          0, -0.08, -0.24
+        ], 3));
+
+        this.material = new THREE.LineBasicMaterial({
+          color: 0xfff86a,
+          transparent: true,
+          opacity: 1,
+          blending: THREE.AdditiveBlending
+        });
+        this.mesh = new THREE.LineSegments(geometry, this.material);
+        this.glow = new THREE.Points(
+          new THREE.BufferGeometry().setAttribute("position", new THREE.Float32BufferAttribute([0, 0, 0], 3)),
+          new THREE.PointsMaterial({
+            color: 0xffffff,
+            size: 0.18,
+            transparent: true,
+            opacity: 0.9,
+            blending: THREE.AdditiveBlending,
+            depthWrite: false
+          })
+        );
+        this.mesh.add(this.glow);
+        this.scene.add(this.mesh);
+        this.updateTransform();
+      }
+
+      update(delta) {
+        this.depth += this.speed * delta;
+        if (this.depth > 1.04) {
+          this.alive = false;
+        }
+        this.updateTransform();
+      }
+
+      updateTransform() {
+        const position = this.tunnel.positionFor(this.lane, this.depth);
+        this.mesh.position.copy(position);
+        this.mesh.rotation.z = this.tunnel.angleForLane(this.lane);
+        this.mesh.scale.setScalar(THREE.MathUtils.lerp(0.92, 0.48, this.depth));
+      }
+
+      destroy() {
+        this.alive = false;
+        this.scene.remove(this.mesh);
+        this.glow.geometry.dispose();
+        this.glow.material.dispose();
+        this.mesh.geometry.dispose();
+        this.material.dispose();
+      }
+    }
+
+    // Crawlers move from deep tunnel space toward the rim; spikers also leave lane hazards.
+    class Enemy {
+      constructor(scene, tunnel, lane, type, level) {
+        this.scene = scene;
+        this.tunnel = tunnel;
+        this.lane = lane;
+        this.type = type;
+        this.depth = 1.02;
+        this.alive = true;
+        this.rimMode = false;
+        this.rimDirection = Math.random() < 0.5 ? -1 : 1;
+        this.rimStepTimer = 0;
+        this.rimStepDelay = 0.55;
+        this.trailTimer = 0;
+        this.trail = [];
+        this.scoreValue = type === "spiker" ? 170 : type === "fast" ? 120 : 80;
+
+        const config = {
+          basic: { color: 0xff3df2, speed: 0.12, scale: 0.78 },
+          fast: { color: 0xff4a2d, speed: 0.22, scale: 0.64 },
+          spiker: { color: 0xa8ff3f, speed: 0.095, scale: 0.84 }
+        }[type];
+
+        this.color = config.color;
+        this.speed = config.speed + level * 0.012;
+        this.scale = config.scale;
+        this.rimStepDelay = Math.max(0.18, (type === "fast" ? 0.28 : type === "spiker" ? 0.58 : 0.44) - level * 0.018);
+        this.material = new THREE.LineBasicMaterial({
+          color: this.color,
+          transparent: true,
+          opacity: 0.96,
+          blending: THREE.AdditiveBlending
+        });
+
+        this.mesh = new THREE.LineSegments(this.createGeometry(), this.material);
+        this.scene.add(this.mesh);
+        this.updateTransform();
+      }
+
+      createGeometry() {
+        const points = this.type === "spiker"
+          ? [
+              0, 0.46, 0, 0.34, 0, 0,
+              0.34, 0, 0, 0, -0.46, 0,
+              0, -0.46, 0, -0.34, 0, 0,
+              -0.34, 0, 0, 0, 0.46, 0,
+              -0.52, 0, 0, 0.52, 0, 0
+            ]
+          : this.type === "fast"
+            ? [
+                0.44, 0, 0, -0.32, 0.34, 0,
+                -0.32, 0.34, 0, -0.2, 0, 0,
+                -0.2, 0, 0, -0.32, -0.34, 0,
+                -0.32, -0.34, 0, 0.44, 0, 0,
+                -0.14, -0.2, 0, -0.14, 0.2, 0
+              ]
+            : [
+                0, 0.42, 0, 0.42, 0, 0,
+                0.42, 0, 0, 0, -0.42, 0,
+                0, -0.42, 0, -0.42, 0, 0,
+                -0.42, 0, 0, 0, 0.42, 0,
+                -0.28, -0.28, 0, 0.28, 0.28, 0,
+                -0.28, 0.28, 0, 0.28, -0.28, 0
+              ];
+
+        const geometry = new THREE.BufferGeometry();
+        geometry.setAttribute("position", new THREE.Float32BufferAttribute(points, 3));
+        return geometry;
+      }
+
+      update(delta, elapsed) {
+        if (this.rimMode) {
+          this.updateRimOrbit(delta, elapsed);
+          return;
+        }
+
+        this.depth -= this.speed * delta;
+        if (this.type === "fast") {
+          this.depth -= Math.sin(elapsed * 10 + this.lane) * 0.012 * delta;
+        }
+
+        if (this.type === "spiker") {
+          this.trailTimer -= delta;
+          if (this.trailTimer <= 0 && this.depth < 0.96 && this.depth > 0.08) {
+            this.trailTimer = 0.22;
+            this.addTrailSegment();
+          }
+        }
+
+        if (this.depth <= 0.045) {
+          this.enterRimMode();
+        }
+        this.updateTransform(elapsed);
+      }
+
+      enterRimMode() {
+        this.rimMode = true;
+        this.depth = 0;
+        this.rimStepTimer = this.rimStepDelay;
+        this.scoreValue += 60;
+      }
+
+      updateRimOrbit(delta, elapsed) {
+        this.rimStepTimer -= delta;
+        while (this.rimStepTimer <= 0) {
+          this.lane = THREE.MathUtils.euclideanModulo(this.lane + this.rimDirection, this.tunnel.laneCount);
+          this.rimStepTimer += this.rimStepDelay;
+        }
+        this.updateTransform(elapsed);
+      }
+
+      addTrailSegment() {
+        const geometry = new THREE.BufferGeometry();
+        const start = this.tunnel.positionFor(this.lane, Math.min(0.98, this.depth + 0.025));
+        const end = this.tunnel.positionFor(this.lane, Math.min(1, this.depth + 0.11));
+        geometry.setAttribute("position", new THREE.Float32BufferAttribute([...start.toArray(), ...end.toArray()], 3));
+
+        const material = new THREE.LineBasicMaterial({
+          color: 0xa8ff3f,
+          transparent: true,
+          opacity: 0.68,
+          blending: THREE.AdditiveBlending
+        });
+        const mesh = new THREE.LineSegments(geometry, material);
+        this.scene.add(mesh);
+        this.trail.push({ mesh, material, geometry, lane: this.lane, depth: this.depth, life: 5.5 });
+      }
+
+      updateTrail(delta) {
+        for (const segment of this.trail) {
+          segment.life -= delta;
+          segment.material.opacity = Math.max(0, Math.min(0.72, segment.life / 4));
+        }
+        this.trail = this.trail.filter((segment) => {
+          if (segment.life > 0 && this.alive) return true;
+          this.scene.remove(segment.mesh);
+          segment.geometry.dispose();
+          segment.material.dispose();
+          return false;
+        });
+      }
+
+      updateTransform(elapsed = 0) {
+        const position = this.tunnel.positionFor(this.lane, this.depth);
+        const angle = this.tunnel.angleForLane(this.lane, this.depth);
+        const outward = new THREE.Vector3(Math.cos(angle), Math.sin(angle), 0);
+        this.mesh.position.copy(position);
+        if (this.rimMode) {
+          this.mesh.position.add(outward.multiplyScalar(0.46));
+          this.mesh.rotation.z = angle + elapsed * 5.5;
+          this.mesh.scale.setScalar(this.scale * 1.22);
+          this.material.color.setHex(this.isVulnerableRimSegment() ? 0xffffff : 0xff4a2d);
+          this.material.opacity = this.isVulnerableRimSegment()
+            ? 0.72 + Math.abs(Math.sin(elapsed * 18)) * 0.28
+            : 0.92;
+          return;
+        }
+
+        this.mesh.rotation.z = angle + elapsed * (this.type === "fast" ? 7 : 2.5);
+        this.mesh.scale.setScalar(this.scale * THREE.MathUtils.lerp(1.15, 0.42, this.depth));
+        this.material.color.setHex(this.color);
+      }
+
+      isVulnerableRimSegment() {
+        return this.rimMode && this.tunnel.isSafeRimLane(this.lane);
+      }
+
+      destroy(removeTrail = false) {
+        this.alive = false;
+        this.scene.remove(this.mesh);
+        this.mesh.geometry.dispose();
+        this.material.dispose();
+
+        if (removeTrail) {
+          for (const segment of this.trail) {
+            this.scene.remove(segment.mesh);
+            segment.geometry.dispose();
+            segment.material.dispose();
+          }
+          this.trail = [];
+        }
+      }
+    }
+
+    // Lightweight point bursts keep explosions procedural and cheap.
+    class ParticleBurst {
+      constructor(scene, origin, color, count = 16) {
+        this.scene = scene;
+        this.life = 0.55;
+        this.maxLife = 0.55;
+        this.velocities = [];
+
+        const positions = [];
+        for (let i = 0; i < count; i += 1) {
+          positions.push(origin.x, origin.y, origin.z);
+          const direction = new THREE.Vector3(
+            Math.random() * 2 - 1,
+            Math.random() * 2 - 1,
+            Math.random() * 2 - 1
+          ).normalize();
+          this.velocities.push(direction.multiplyScalar(5 + Math.random() * 8));
+        }
+
+        this.geometry = new THREE.BufferGeometry();
+        this.geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+        this.material = new THREE.PointsMaterial({
+          color,
+          size: 0.08,
+          transparent: true,
+          opacity: 1,
+          blending: THREE.AdditiveBlending,
+          depthWrite: false
+        });
+        this.points = new THREE.Points(this.geometry, this.material);
+        this.scene.add(this.points);
+      }
+
+      update(delta) {
+        this.life -= delta;
+        const positions = this.geometry.attributes.position;
+        for (let i = 0; i < positions.count; i += 1) {
+          positions.setXYZ(
+            i,
+            positions.getX(i) + this.velocities[i].x * delta,
+            positions.getY(i) + this.velocities[i].y * delta,
+            positions.getZ(i) + this.velocities[i].z * delta
+          );
+        }
+        positions.needsUpdate = true;
+        this.material.opacity = Math.max(0, this.life / this.maxLife);
+        return this.life > 0;
+      }
+
+      destroy() {
+        this.scene.remove(this.points);
+        this.geometry.dispose();
+        this.material.dispose();
+      }
+    }
+
+    // Coordinates state, spawning, collisions, scoring, rendering, and UI.
+    class Game {
+      constructor() {
+        this.scene = new THREE.Scene();
+        this.scene.background = new THREE.Color(0x000000);
+
+        this.camera = new THREE.PerspectiveCamera(58, window.innerWidth / window.innerHeight, 0.1, 180);
+        this.camera.position.set(0, 0, 12.5);
+        this.camera.lookAt(0, 0, -22);
+
+        this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
+        this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        this.renderer.setSize(window.innerWidth, window.innerHeight);
+        document.body.appendChild(this.renderer.domElement);
+
+        this.input = new InputManager();
+        this.sound = new SoundFX();
+        this.clock = new THREE.Clock();
+
+        this.tunnel = new Tunnel(this.scene, 16);
+        this.player = new Player(this.scene, this.tunnel);
+
+        this.bullets = [];
+        this.enemies = [];
+        this.particles = [];
+
+        this.score = 0;
+        this.lives = 3;
+        this.level = 1;
+        this.state = GAME_STATES.READY;
+        this.spawnTimer = 0;
+        this.enemiesToSpawn = 0;
+        this.levelClearTimer = 0;
+        this.levelClearDuration = 2.35;
+        this.warpStartDistance = 12.5;
+        this.warpEndDistance = -42;
+        this.screenShake = 0;
+        this.cameraDistance = 12.5;
+        this.lastPlayerLane = 0;
+        this.idleLaneTimer = 0;
+        this.nextSafetyShift = 3.4;
+
+        this.scoreElement = document.getElementById("score");
+        this.levelElement = document.getElementById("level");
+        this.livesElement = document.getElementById("lives");
+        this.waveElement = document.getElementById("wave");
+        this.overlay = document.getElementById("overlay");
+        this.statusElement = document.getElementById("status");
+
+        window.addEventListener("resize", () => this.onResize());
+        this.fitCameraToTunnel();
+        this.updateHud();
+        this.animate();
+      }
+
+      start(skipAudio = false) {
+        if (!skipAudio) {
+          this.sound.ensureContext();
+        }
+        this.clearActors();
+        this.score = 0;
+        this.lives = 3;
+        this.level = 1;
+        this.beginLevel();
+        this.overlay.classList.add("hidden");
+      }
+
+      beginLevel() {
+        this.clearActors();
+        this.tunnel.randomize(this.level);
+        this.player.reset();
+        this.fitCameraToTunnel();
+        this.state = GAME_STATES.PLAYING;
+        this.spawnTimer = 0.35;
+        this.enemiesToSpawn = 8 + this.level * 4;
+        this.levelClearTimer = 0;
+        this.lastPlayerLane = this.player.targetLane;
+        this.idleLaneTimer = 0;
+        this.nextSafetyShift = THREE.MathUtils.randFloat(2.8, 4.4);
+        this.player.invulnerable = Math.max(this.player.invulnerable, 1);
+        this.updateHud();
+      }
+
+      clearActors() {
+        for (const bullet of this.bullets) bullet.destroy();
+        for (const enemy of this.enemies) enemy.destroy(true);
+        for (const particle of this.particles) particle.destroy();
+        this.bullets = [];
+        this.enemies = [];
+        this.particles = [];
+      }
+
+      update(delta, elapsed) {
+        this.tunnel.update(delta, elapsed);
+
+        if (this.input.wasPressed("Enter") && this.state !== GAME_STATES.PLAYING && this.state !== GAME_STATES.LEVEL_CLEAR) {
+          this.start();
+        }
+
+        if (this.state === GAME_STATES.PLAYING) {
+          this.player.update(delta, this.input, elapsed);
+          this.updateIdleRimSafety(delta);
+
+          if (this.input.isDown("Space") && this.player.canShoot()) {
+            this.player.shoot();
+            this.sound.shoot();
+            this.bullets.push(new Bullet(this.scene, this.tunnel, this.player.targetLane));
+          }
+
+          this.updateSpawning(delta);
+          this.updateActors(delta, elapsed);
+          this.checkCollisions();
+          this.checkLevelClear();
+        } else {
+          this.player.update(delta, this.input, elapsed);
+          this.updateActors(delta, elapsed);
+        }
+
+        this.updateCamera(delta, elapsed);
+        this.updateHud();
+        this.input.endFrame();
+      }
+
+      updateSpawning(delta) {
+        if (this.enemiesToSpawn <= 0) return;
+
+        this.spawnTimer -= delta;
+        if (this.spawnTimer > 0) return;
+
+        const lane = Math.floor(Math.random() * this.tunnel.laneCount);
+        const roll = Math.random();
+        const fastChance = Math.min(0.1 + this.level * 0.035, 0.33);
+        const spikerChance = Math.min(0.06 + this.level * 0.024, 0.24);
+        const type = roll < spikerChance ? "spiker" : roll < spikerChance + fastChance ? "fast" : "basic";
+
+        this.enemies.push(new Enemy(this.scene, this.tunnel, lane, type, this.level));
+        this.enemiesToSpawn -= 1;
+        this.spawnTimer = Math.max(0.28, 1.05 - this.level * 0.07 - Math.random() * 0.25);
+      }
+
+      updateIdleRimSafety(delta) {
+        if (this.player.deadTimer > 0) {
+          this.idleLaneTimer = 0;
+          this.lastPlayerLane = this.player.targetLane;
+          return;
+        }
+
+        if (this.player.targetLane !== this.lastPlayerLane) {
+          this.lastPlayerLane = this.player.targetLane;
+          this.idleLaneTimer = 0;
+          this.nextSafetyShift = THREE.MathUtils.randFloat(2.8, 4.4);
+          return;
+        }
+
+        this.idleLaneTimer += delta;
+        if (this.idleLaneTimer >= this.nextSafetyShift) {
+          this.tunnel.rotateRimSafety(Math.random() < 0.5 ? -1 : 1);
+          this.idleLaneTimer = 0;
+          this.nextSafetyShift = THREE.MathUtils.randFloat(2.2, 3.6);
+        }
+      }
+
+      updateActors(delta, elapsed) {
+        for (const bullet of this.bullets) bullet.update(delta);
+        for (const enemy of this.enemies) {
+          enemy.update(delta, elapsed);
+          enemy.updateTrail(delta);
+        }
+        for (const particle of this.particles) particle.update(delta);
+
+        this.bullets = this.bullets.filter((bullet) => {
+          if (bullet.alive) return true;
+          bullet.destroy();
+          return false;
+        });
+        this.enemies = this.enemies.filter((enemy) => {
+          if (enemy.alive) return true;
+          enemy.destroy();
+          return false;
+        });
+        this.particles = this.particles.filter((particle) => {
+          if (particle.life > 0) return true;
+          particle.destroy();
+          return false;
+        });
+      }
+
+      checkCollisions() {
+        // Bullets and enemies share discrete lanes, so collision is a lane match plus depth overlap.
+        for (const bullet of this.bullets) {
+          if (!bullet.alive) continue;
+          for (const enemy of this.enemies) {
+            if (!enemy.alive || enemy.rimMode || enemy.lane !== bullet.lane) continue;
+            if (Math.abs(enemy.depth - bullet.depth) < 0.055) {
+              bullet.alive = false;
+              enemy.destroy(enemy.type !== "spiker");
+              this.score += enemy.scoreValue;
+              this.sound.enemyHit();
+              this.particles.push(new ParticleBurst(this.scene, enemy.mesh.position.clone(), enemy.color, 22));
+              break;
+            }
+          }
+        }
+
+        // Enemy bodies and spiker trails are dangerous only near the player rim.
+        for (const enemy of this.enemies) {
+          if (!enemy.alive) continue;
+
+          if (enemy.rimMode && enemy.lane === this.player.targetLane) {
+            if (enemy.isVulnerableRimSegment()) {
+              enemy.destroy(enemy.type !== "spiker");
+              this.score += enemy.scoreValue;
+              this.sound.enemyHit();
+              this.particles.push(new ParticleBurst(this.scene, enemy.mesh.position.clone(), 0xffffff, 28));
+            } else {
+              this.damagePlayer(enemy.mesh.position.clone());
+              enemy.destroy(false);
+            }
+            break;
+          }
+
+          for (const segment of enemy.trail) {
+            if (segment.lane === this.player.targetLane && segment.depth < 0.16) {
+              this.damagePlayer(segment.mesh.position.clone());
+              segment.life = 0;
+              break;
+            }
+          }
+        }
+      }
+
+      damagePlayer(origin) {
+        if (!this.player.hit()) return;
+
+        this.lives -= 1;
+        this.screenShake = 0.5;
+        this.sound.playerHit();
+        this.particles.push(new ParticleBurst(this.scene, origin, 0xfff86a, 34));
+
+        if (this.lives <= 0) {
+          this.state = GAME_STATES.GAME_OVER;
+          this.statusElement.textContent = `FINAL SCORE ${String(this.score).padStart(6, "0")}`;
+          this.overlay.classList.remove("hidden");
+        }
+      }
+
+      checkLevelClear() {
+        if (this.enemiesToSpawn > 0 || this.enemies.length > 0) return;
+
+        this.state = GAME_STATES.LEVEL_CLEAR;
+        this.levelClearDuration = 2.35;
+        this.levelClearTimer = this.levelClearDuration;
+        this.warpStartDistance = this.cameraDistance;
+        this.warpEndDistance = this.tunnel.farZ + 7;
+        this.tunnel.triggerFlash();
+        this.sound.levelClear();
+        this.score += this.level * 500;
+      }
+
+      updateCamera(delta, elapsed) {
+        const baseX = Math.sin(elapsed * 0.45) * 0.08;
+        const baseY = Math.cos(elapsed * 0.5) * 0.08;
+
+        const warpProgress = this.state === GAME_STATES.LEVEL_CLEAR
+          ? THREE.MathUtils.clamp(1 - this.levelClearTimer / this.levelClearDuration, 0, 1)
+          : 0;
+        const warpEase = warpProgress * warpProgress * (3 - 2 * warpProgress);
+
+        if (this.screenShake > 0) {
+          this.screenShake = Math.max(0, this.screenShake - delta);
+          const amount = this.screenShake * 0.42;
+          this.camera.position.x = baseX + (Math.random() * 2 - 1) * amount;
+          this.camera.position.y = baseY + (Math.random() * 2 - 1) * amount;
+        } else {
+          this.camera.position.x = baseX * (1 + warpProgress * 9);
+          this.camera.position.y = baseY * (1 + warpProgress * 9);
+        }
+
+        if (this.state === GAME_STATES.LEVEL_CLEAR) {
+          this.camera.position.z = THREE.MathUtils.lerp(this.warpStartDistance, this.warpEndDistance, warpEase);
+          this.camera.lookAt(0, 0, this.tunnel.farZ - 16);
+          this.tunnel.group.rotation.z += delta * (1.8 + warpProgress * 6);
+          this.tunnel.group.scale.setScalar(1 + Math.sin(warpProgress * Math.PI) * 0.18);
+          this.levelClearTimer -= delta;
+          if (this.levelClearTimer <= 0) {
+            this.level += 1;
+            this.tunnel.group.rotation.z = 0;
+            this.tunnel.group.scale.setScalar(1);
+            this.beginLevel();
+          }
+          return;
+        }
+
+        this.camera.position.z = this.cameraDistance;
+        this.camera.lookAt(0, 0, -24);
+      }
+
+      updateHud() {
+        this.scoreElement.textContent = `SCORE ${String(this.score).padStart(6, "0")}`;
+        this.levelElement.textContent = `LEVEL ${String(this.level).padStart(2, "0")}`;
+        this.livesElement.textContent = `LIVES ${this.lives}`;
+        this.waveElement.textContent = `RIM ${String(this.player.targetLane + 1).padStart(2, "0")}`;
+      }
+
+      onResize() {
+        this.camera.aspect = window.innerWidth / window.innerHeight;
+        this.camera.updateProjectionMatrix();
+        this.renderer.setSize(window.innerWidth, window.innerHeight);
+        this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        this.fitCameraToTunnel();
+      }
+
+      fitCameraToTunnel() {
+        const aspect = Math.max(0.25, window.innerWidth / window.innerHeight);
+        const limitingAxis = Math.min(1, aspect);
+        const fovRadians = THREE.MathUtils.degToRad(this.camera.fov);
+        const playerAndHudMargin = window.innerHeight < 560 ? 1.45 : 1.05;
+        const radiusToFit = this.tunnel.getFitRadius() + playerAndHudMargin;
+        const requiredDistance = radiusToFit / (Math.tan(fovRadians / 2) * limitingAxis);
+
+        this.cameraDistance = THREE.MathUtils.clamp(requiredDistance, 11.5, 42);
+        this.camera.position.z = this.cameraDistance;
+        this.camera.lookAt(0, 0, -24);
+      }
+
+      animate() {
+        requestAnimationFrame(() => this.animate());
+        const delta = Math.min(this.clock.getDelta(), 0.033);
+        const elapsed = this.clock.elapsedTime;
+        this.update(delta, elapsed);
+        this.renderer.render(this.scene, this.camera);
+      }
+    }
+
+    const game = new Game();
+    if (new URLSearchParams(window.location.search).has("autostart")) {
+      game.start(true);
+    }
+  </script>
+</body>
+</html>
