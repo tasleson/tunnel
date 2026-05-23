@@ -2,7 +2,11 @@
 
 Rimfire is a browser arcade game inspired by early vector tunnel shooters. It is built with Three.js, procedural wireframe geometry, and Web Audio API sound effects.
 
-## Play
+## TL;DR I just wanna play it now!
+
+https://tasleson.github.io/tunnel/game.html
+
+## Play locally
 
 Open `index.html` through a local web server to view this README and play the game in an embedded window.
 
